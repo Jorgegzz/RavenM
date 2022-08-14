@@ -120,7 +120,6 @@ namespace RavenM
                 return;
 
             SteamAPI.RunCallbacks();
-
             if (!FirstSteamworksInit)
             {
                 FirstSteamworksInit = true;
