@@ -4,6 +4,7 @@ using HarmonyLib;
 using Steamworks;
 using System.Collections.Generic;
 using System.Reflection;
+using RavenM.DiscordGameSDK;
 using UnityEngine;
 namespace RavenM
 {
@@ -131,6 +132,10 @@ namespace RavenM
                 var netObject = new GameObject();
                 netObject.AddComponent<IngameNetManager>();
                 DontDestroyOnLoad(netObject);
+
+                var discordObject = new GameObject();
+                netObject.AddComponent<DiscordIntegration>();
+                DontDestroyOnLoad(discordObject);
             }
         }
     }
