@@ -8,7 +8,7 @@ namespace RavenM
 {
     public class DiscordIntegration : MonoBehaviour
     {
-        public static DiscordIntegration Instance;
+        public static DiscordIntegration instance;
         
         public Discord Discord;
 
@@ -16,18 +16,34 @@ namespace RavenM
 
         public long startSessionTime;
 
-        private LobbyManager _lobbyManager;
         private ActivityManager _activityManager;
+        private LobbyManager _lobbyManager;
         private void Start()
         {
             Discord = new Discord(discordClientID, (UInt64) CreateFlags.Default);
             Plugin.logger.LogWarning("Discord Instance created");
             startSessionTime = ((DateTimeOffset) DateTime.Now).ToUnixTimeSeconds();
-
+            
+            _activityManager = Discord.GetActivityManager();
+            _lobbyManager = Discord.GetLobbyManager();
+            
             StartCoroutine(StartActivities());
             
-            _lobbyManager = Discord.GetLobbyManager();
-            _activityManager = Discord.GetActivityManager();
+            _activityManager.OnActivityJoin += _ =>
+            {
+                var secret = LobbySystem.instance.ActualLobbyID + "_match";
+                Plugin.logger.LogInfo($"OnJoin {secret}");
+                _lobbyManager.ConnectLobbyWithActivitySecret(secret, (Result result, ref Lobby lobby) =>
+                {
+                    Console.WriteLine("Connected to lobby: {0}", lobby.Id);
+                    _lobbyManager.ConnectNetwork(lobby.Id);
+                    _lobbyManager.OpenNetworkChannel(lobby.Id, 0, true);
+                    foreach (var user in _lobbyManager.GetMemberUsers(lobby.Id))
+                    {
+                        Plugin.logger.LogInfo($"lobby member: {user.Username}");
+                    }
+                });
+            };
         }
         
         IEnumerator StartActivities()
@@ -40,9 +56,6 @@ namespace RavenM
         // Private Variables that makes me question my coding skills
         private float _timer;
         private string _gameMode = "Insert Game Mode";
-        private LobbyTransaction txn;
-        private Lobby _currentLobby;
-        private bool _isDiscordLobbyActive;
         private void FixedUpdate()
         {
            Discord.RunCallbacks();
@@ -51,52 +64,87 @@ namespace RavenM
 
            if (_timer > 5f)
            {
-               if (GameManager.instance == null) { return; }
-               
-               
-               if (!LobbySystem.instance.InLobby && GameManager.IsIngame()) // Playing SinglePlayer
-               {
-                   var dropdown = InstantActionMaps.instance.gameModeDropdown;
-                   _gameMode = dropdown.options[dropdown.value].text;
-                   UpdateActivity(Discord, Activities.InSinglePlayerGame, _gameMode);
-               }
-               else if (LobbySystem.instance.InLobby)
-               {
-                   if (!_isDiscordLobbyActive)
-                   {
-                       txn = _lobbyManager.GetLobbyCreateTransaction();
-                       txn.SetCapacity(16);
-                       txn.SetType(LobbyType.Public); // TODO: Detect if the lobby is browsable or not to determine the LobbyType will be public or private
-                   
-                       _lobbyManager.CreateLobby(txn, (Result result, ref Lobby lobby) =>
-                       {
-                           _currentLobby = lobby;
-                           Plugin.logger.LogInfo($"lobby {lobby.Id} created with secret {lobby.Secret}");
-                       });
-                       _isDiscordLobbyActive = true; // TODO: For now, there is no way the discord lobby destroys itself once you are out of a lobby
-                   }
-                   
-                   if (!GameManager.IsIngame()) // Waiting In lobby Multiplayer
-                   {
-                       var dropdown = InstantActionMaps.instance.gameModeDropdown;
-                       _gameMode = dropdown.options[dropdown.value].text;
-                       int currentLobbyMembers = SteamMatchmaking.GetNumLobbyMembers(LobbySystem.instance.ActualLobbyID);
-                       int currentLobbyMemberCap = SteamMatchmaking.GetLobbyMemberLimit(LobbySystem.instance.ActualLobbyID);
-                       UpdateActivity(Discord, Activities.InLobby, _gameMode ,currentLobbyMembers, currentLobbyMemberCap);
-                   }
-                   else // Playing Multiplayer
-                   {
-                       int currentLobbyMembers = SteamMatchmaking.GetNumLobbyMembers(LobbySystem.instance.ActualLobbyID);
-                       int currentLobbyMemberCap = SteamMatchmaking.GetLobbyMemberLimit(LobbySystem.instance.ActualLobbyID);
-                       UpdateActivity(Discord, Activities.InMultiPlayerGame, _gameMode ,currentLobbyMembers, currentLobbyMemberCap);
-                   }
-               }
-
+                ChangeActivityDynamically();
+                
                _timer = 0f;
            }
         }
 
-        public void UpdateActivity(Discord discord, Activities activity, string gameMode = "None", int currentPlayers = 1, int maxPlayers = 2)
+        private bool _isInGame;
+        private bool _isInLobby;
+        private bool _isHost;
+        private bool _isThereDiscordLobby;
+        private Lobby _currentLobby;
+
+        void ChangeActivityDynamically()
+        {
+            if (GameManager.instance == null) { return; }
+
+            _isInGame = GameManager.instance.ingame;
+            _isInLobby = LobbySystem.instance.InLobby;
+            _isHost = LobbySystem.instance.IsLobbyOwner;
+
+
+            if (_isInGame && !_isInLobby)
+            {
+                var dropdown = InstantActionMaps.instance.gameModeDropdown;
+                _gameMode = dropdown.options[dropdown.value].text;
+                UpdateActivity(Discord, Activities.InSinglePlayerGame, _gameMode);
+            }
+            else if (_isInLobby) 
+            {
+                int currentLobbyMembers = SteamMatchmaking.GetNumLobbyMembers(LobbySystem.instance.ActualLobbyID);
+                int currentLobbyMemberCap = SteamMatchmaking.GetLobbyMemberLimit(LobbySystem.instance.ActualLobbyID);
+
+                if (!_isInGame) // Waiting in Lobby
+                {
+                    var dropdown = InstantActionMaps.instance.gameModeDropdown;
+                    _gameMode = dropdown.options[dropdown.value].text;
+                    UpdateActivity(Discord, Activities.InLobby, _gameMode ,currentLobbyMembers, currentLobbyMemberCap, LobbySystem.instance.ActualLobbyID.ToString());
+                }
+                else // Playing in a Lobby
+                {
+                    UpdateActivity(Discord, Activities.InMultiPlayerGame, _gameMode ,currentLobbyMembers, currentLobbyMemberCap);
+                }
+
+                if (_isHost && !_isThereDiscordLobby) // Created a RavenM Lobby
+                {
+                    // Create a Discord Lobby to keep track of discord members
+                    var transaction = _lobbyManager.GetLobbyCreateTransaction();
+                    transaction.SetCapacity((uint)currentLobbyMemberCap);
+                    transaction.SetType(LobbySystem.instance.PrivateLobby ? LobbyType.Private : LobbyType.Public);
+
+                    _lobbyManager.CreateLobby(transaction, (Result result, ref Lobby lobby) =>
+                    {
+                        _currentLobby = lobby;
+                        if (result != Result.Ok)
+                        {
+                            return;
+                        }
+                        
+                        Plugin.logger.LogInfo($"lobby {lobby.Id} with capacity {lobby.Capacity}");
+                        
+                        foreach (var user in _lobbyManager.GetMemberUsers(lobby.Id))
+                        {
+                            Plugin.logger.LogInfo($"lobby member: {user.Username}");
+                        }
+                    });
+
+                    _isThereDiscordLobby = true;
+                }
+            }
+            else // Left the lobby
+            {
+                _lobbyManager.DisconnectLobby(_currentLobby.Id, (result) =>
+                {
+                    Plugin.logger.LogInfo($"Discord lobby disconnect, Result: {result}");
+                });
+                UpdateActivity(Discord, Activities.InMenu);
+                _isThereDiscordLobby = false;
+            }
+        }
+        
+        public void UpdateActivity(Discord discord, Activities activity, string gameMode = "None", int currentPlayers = 1, int maxPlayers = 2, string lobbyID = "None")
         {
             var activityManager = discord.GetActivityManager();
             var activityPresence = new Activity();
@@ -142,7 +190,7 @@ namespace RavenM
                             LargeText = "RavenM",
                         },
                         Party = {
-                            Id = _currentLobby.Id.ToString(),
+                            Id = lobbyID,
                             Size = {
                                 CurrentSize = currentPlayers,
                                 MaxSize = maxPlayers,
@@ -150,12 +198,8 @@ namespace RavenM
                         },
                         Secrets =
                         {
-                            Match = "foo match secret", // TODO: I don't know how the discord secrets work for now,
-                                                        // TODO: I just know that if I assign them a string, the invite /ask to join buttons appear
-                                                        
-                                                        // TODO: This Invite/Ask to Join Thing Should also be working in the MultiPlayerGame Activity-
-                                                        // TODO: once I get this thing working in the Lobby Activity
-                            Join= "abcd",
+                            Match = lobbyID + "_match",
+                            Join = lobbyID + "_join",
                         },
                         Instance = true,
                     };
