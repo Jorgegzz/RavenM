@@ -17,13 +17,10 @@ namespace RavenM
         public long startSessionTime;
 
         private ActivityManager _activityManager;
-        
-        private bool _hostPermission = true;
-        
         private void Start()
         {
-            Environment.SetEnvironmentVariable("DISCORD_INSTANCE_ID", "0");
-            Discord = new Discord(discordClientID, (UInt64) CreateFlags.Default);
+            Environment.SetEnvironmentVariable("DISCORD_INSTANCE_ID", "1007054793220571247");
+            Discord = new Discord(long.Parse(Environment.GetEnvironmentVariable("DISCORD_INSTANCE_ID")!), (UInt64) CreateFlags.Default);
             Plugin.logger.LogWarning("Discord Instance created");
             startSessionTime = ((DateTimeOffset) DateTime.Now).ToUnixTimeSeconds();
             
@@ -33,7 +30,6 @@ namespace RavenM
             
             _activityManager.OnActivityJoin += secret =>
             {
-                secret = secret.Replace("_match", "");
                 secret = secret.Replace("_join", "");
                 
                 Plugin.logger.LogInfo($"OnJoin {secret}");
@@ -48,15 +44,12 @@ namespace RavenM
                 LobbySystem.instance.InLobby = true;
                 LobbySystem.instance.IsLobbyOwner = false;
                 LobbySystem.instance.LobbyDataReady = false;
-                
-                _hostPermission = true;
             };
-
+            
             _activityManager.OnActivityJoinRequest += (ref User user) =>
             {
+                // The Ask to join Button Doesnt even work rn (Discord's fault) try the right click Ask to join button instead
                 Plugin.logger.LogInfo($"OnJoinRequest {user.Username} {user.Id}");
-
-                _hostPermission = !LobbySystem.instance.PrivateLobby;
             };
         }
         
@@ -177,7 +170,6 @@ namespace RavenM
                         },
                         Secrets =
                         {
-                            Match = lobbyID + "_match",
                             Join = lobbyID + "_join",
                         },
                         Instance = true,
